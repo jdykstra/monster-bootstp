@@ -1,0 +1,5 @@
+ucsdpsys -r bootstp/src -w pm_sys -b script_bootstp
+
+
+dd if=pm_sys/system.wrk.code of=bootstp.bin skip=1 count=2
+ucsdpsys_mkfs --architecture 8080 --size=2048 -L FLSYS flsys.svol
