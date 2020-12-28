@@ -1,0 +1,231 @@
+        .ABSOLUTE
+	.PROC   UBOOT
+        .TITLE  "UBOOT  - BOOTSTRAP UCSD OPERATING SYSTEM"    
+LISTINC .EQU    0
+        .INCLUDE ASMINC.TEXT
+
+
+;  VERSION E3
+
+        .PAGE
+;*        ASSEMBLY PARAMETERS AND CONFIGURATION INFO
+;
+;
+DDTBOOT .EQU    1                       ; ASSEMBLE BOOT FOR DDT
+
+	.IF     DDTBOOT=0
+
+INTRPORG .EQU   2000H           ; INTERPRETER ORIGIN
+INTENTRY .EQU   INTRPORG+100H   ; INTERPRETER ENTRY POINT
+
+	.ELSE
+
+INTRPORG .EQU   0ED80H          ; DDT ORIGIN
+INTENTRY .EQU   INTRPORG+1      ; DDT INITIALIZATION ENTRY POINT
+DDTBTSP .EQU    INTRPORG-2      ; TOP OF NEW STACK
+
+	.ENDC
+
+PROGORG .EQU    8000H           ; WHERE WE ARE LOADED IN MEMORY
+DSKFMT  .EQU    MAPOPT+RQSIZ5+V_DRQDDN   ; DISK FORMAT
+
+
+
+;*        INTERNAL SYMBOLS
+;
+;
+DIRBLK  .EQU    2               ; UCSD BLOCK NUMBER OF DIRECTORY
+NDIRBLK .EQU    4               ; NUMBER OF BLOCKS IN DIRECTORY
+LE_DIR  .EQU    26.             ; BYTES PER DIRECTORY ENTRY
+C_FIRST .EQU    0               ; FIRST BLOCK ADR WITHIN ENTRY
+C_LAST  .EQU    2               ; LAST BLOCK ADR WITHIN ENTRY
+C_NAME  .EQU    6               ; FILE TITLE WITHIN ENTRY
+DIRECT  .EQU    0B000H          ; DIRECTORY BUFFER ADR
+L_SEC   .EQU    512.            ; BYTES PER SECTOR
+N_ENT   .EQU    77.             ; NUMBER OF POSSIBLE DIRECTORY ENTRIES
+        .PAGE
+        .ORG    PROGORG
+        JP      BEGIN           ; GO EXECUTE CODE
+
+
+
+;*        DISK REQUEST BLOCK
+;
+;
+REQBLK
+        .BLOCK  1               ; SPACE FOR UNIT NUMBER
+        .BLOCK  3               ; ABSOLUTE ADDRESS
+        .BYTE   DSKFMT          ; DISK FORMAT
+        .BYTE   0               ; FLAGS
+        .BLOCK  1               ; S0 ADDRESS
+        .BYTE   0               ; EXPANSION BYTE
+        .BLOCK  2               ; MEMORY ADDRESS
+        .BYTE   1               ; SECTOR COUNT
+
+
+
+;*        VARIABLES
+;
+;
+SECCNT  .BLOCK  1               ; SECTOR COUNT DURING READ
+MEMTOP  .BLOCK  2               ; POINTER TO TOP OF AVAILABLE MEMORY
+
+	.IF     DDTBOOT=0
+
+ITITLE  .ASCII  "SYSTEM.MICRO"  ; INTERPRETER TITLE
+
+	.ELSE
+
+ITITLE  .ASCII  "DDT.BOOTCODE"  ; DDT TITLE
+
+	.ENDC
+
+L_INTNAM .EQU   $-ITITLE        ; LENGTH OF INTERPRETER TITLE
+        .PAGE
+;*        READ UCSD INTERPRETER INTO MEMORY
+;
+;
+
+BEGIN
+        LD      (MEMTOP),HL     ; STORE POINTER TO TOP OF AVAILABLE MEMORY
+
+	.IF     DDTBOOT<>0
+
+	LD      SP,DDTBTSP      ; MOVE STACK IF BOOTING DDT
+
+	.ENDC
+;
+;  FIRST READ THE DISK DIRECTORY INTO MEMORY.
+;
+        LD      A,B             ; GET UNIT NUMBER PASSED BY BOOT
+        LD      (REQBLK+C_DRQUNT),A ; STORE BOOT DISK UNIT NUMBER
+
+        LD      DE,DIRBLK       ; DIRECTORY ADDRESS
+        LD      HL,NDIRBLK      ; LENGTH OF DIRECTORY
+        LD      BC,DIRECT       ; PLACE TO READ IT TO
+        CALL    UCSDRD          ; READ DIRECTORY
+;
+;  SEARCH THE DIRECTORY FOR THE INTERPRETER
+;
+        LD      IX,DIRECT+LE_DIR ; FIRST FILE ENTRY IN DIRECTORY
+        LD      B,N_ENT         ; NUMBER OF ENTRIES TO SEARCH
+
+ENTLOOP
+        PUSH    IX              ; SAVE ENTRY POINTER
+        PUSH    BC              ; SAVE ENTRY COUNT
+
+        LD      A,(IX+C_NAME)   ; GET BYTE COUNT OF NEXT TITLE
+        CP      L_INTNAM        ; SEE IF MATCHES DESIRED TITLE
+        JR      NZ,NXTENT       ; JUMP IF NO MATCH
+
+        LD      IY,ITITLE       ; ADR OF INTERPRETER TITLE
+        LD      B,A             ; MOVE LENGTH TO B
+
+CHLOOP
+        LD      A,(IX+C_NAME+1) ; GET NEXT CHARACTER
+        CP      (IY+0)          ; COMPARE
+        JR      NZ,NXTENT       ; JUMP IF NO MATCH
+
+        INC     IX              ; BUMP POINTERS
+        INC     IY
+        DJNZ    CHLOOP          ; LOOP IF MORE CHARS TO GO
+
+        JR      MATCH
+
+
+
+;*
+;  COME HERE IF THIS ENTRY DOES NOT MATCH WHAT WE ARE LOOKING FOR.
+;
+NXTENT
+        POP     BC              ; RESTORE ENTRY COUNT
+        POP     IX              ; RESTORE ENTRY POINTER
+
+        LD      DE,LE_DIR       ; LENGTH OF DIRECTORY ENTRY
+        ADD     IX,DE           ; BUMP POINTER
+
+        DJNZ    ENTLOOP         ; LOOP IF MORE ENTRIES TO GO
+
+        HALT                    ; INTERPRETER NOT IN DIRECTORY
+
+
+
+;*
+;  COME HERE AFTER THE PROPER ENTRY HAS BEEN FOUND IN THE
+;  DIRECTORY.  THE STACK STILL CONTAINS THE ENTRY POINTER
+;  AND THE (NOW USELESS) ENTRY COUNT.
+;
+MATCH
+        POP     BC              ; TAKE COUNT OFF THE STACK
+        POP     IX              ; RESTORE ENTRY POINTER
+;
+;  COMPUTE THE SECTOR COUNT FOR READING IN THE INTERPRETER.
+;
+        LD      L,(IX+C_LAST)   ; GET LAST+1 BLOCK NUMBER
+        LD      H,(IX+C_LAST+1)
+        LD      E,(IX+C_FIRST)  ; GET FIRST BLOCK NUMBER
+        LD      D,(IX+C_FIRST+1)
+        AND     A             ; CLEAR C FLAG
+        SBC     HL,DE           ; GET FILE SIZE IN BLOCKS
+
+        LD      BC,INTRPORG     ; INTERPRETER ORIGIN
+        CALL    UCSDRD          ; READ UCSD FILE
+
+;
+;  SET UP PARAMETERS FOR THE INTERPRETER, AND GO TO IT.
+;
+
+        LD      HL,(MEMTOP)     ; FIRST AVAILABLE MEMORY WORD
+        LD      SP,HL           ; PUT STACK AT TOP OF MEMORY
+	LD      A,(REQBLK+C_DRQUNT) ; BOOTSTRAP UNIT NUMBER
+        LD      B,A             ; MOVE TO B
+        JP      INTENTRY        ; GO TO INTERPRETER BOOT
+        .PAGE
+;*        SUBROUTINE UCSDRD - READ UCSD FILE
+;
+;         ENTRY - L CONTAINS BLOCK COUNT
+;                 DE CONTAINS BLOCK ADDRESS
+;                 BC CONTAINS MEMORY ADDRESS
+;
+UCSDRD
+        LD      A,L             ; STORE SECTOR COUNT
+        LD      (SECCNT),A
+        LD      (REQBLK+C_DRQADR),BC ; STORE MEMORY ADDRESS
+
+        EX      DE,HL           ; MOVE BLOCK ADR TO HL
+        ADD     HL,HL           ; MULTIPLY BY 4
+        ADD     HL,HL
+        EX      DE,HL           ; MOVE BACK TO DE
+        LD      HL,REQBLK       ; REQUEST BLOCK ADR
+        MTRREQ  M_DSKADR        ; CONVERT DISK ADDRESS
+
+;
+;  SECTOR READ LOOP.
+;
+SECLOOP
+        LD      HL,REQBLK       ; READ ONE SECTOR
+        MTRREQ  M_DSKRD
+        AND     A
+        JR      NZ,IOERROR      ; JUMP ON I/O ERROR
+
+        LD      HL,(REQBLK+C_DRQADR) ; BUMP MEMORY ADDRESS
+        LD      DE,L_SEC
+        ADD     HL,DE
+        LD      (REQBLK+C_DRQADR),HL
+
+        LD      HL,SECCNT       ; DECREMENT SECTOR COUNT
+        DEC     (HL)
+        JR      NZ,SECLOOP      ; LOOP IF MORE TO GO
+
+        RET
+
+
+
+;*
+;  I/O ERROR.  FOR NOW, JUST HALT.
+;
+IOERROR
+        HALT
+
+        .END
+
