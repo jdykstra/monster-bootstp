@@ -1,0 +1,4 @@
+ucsdpsys -P "II.0" -w ../disk-images/BLDSYS/ -r src/ -w ../disk-images/LIST -b script_bootstp
+
+dd if=../disk-images/BLDSYS/system.wrk.code of=boot.bin skip=1 count=2
+ucsdpsys_mkfs --architecture 8080 --size=2048 -L HWSYS hwsys.svol
